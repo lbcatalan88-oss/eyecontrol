@@ -41,7 +41,10 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
     private val filterY = OneEuroFilter(minCutoff = 0.5, beta = 0.005)
 
     /** 校正頁開啟期間暫停追蹤（相機同程序只有一路，兩邊搶會互踢）。 */
+    @Volatile
     private var pausedForCalibration = false
+
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     // 凝視停留狀態
     private var anchorX = 0f
@@ -60,19 +63,26 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
     override fun onServiceConnected() {
         super.onServiceConnected()
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
+        instance = this
 
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val bounds = wm.currentWindowMetrics.bounds
         screenW = bounds.width()
         screenH = bounds.height()
 
+        addCursorOverlay(wm)
+        startEngine()
+    }
+
+    /** 建立並啟動追蹤引擎；同時（重新）載入校正模型。校正後恢復也走這裡。 */
+    private fun startEngine() {
+        if (pausedForCalibration) return
         model = GazeModel.load(this)
         if (model == null) {
             Log.w(TAG, "尚未校正，游標無法運作——請先在 App 內完成校正")
         }
-
-        addCursorOverlay(wm)
-
+        filterX.reset()
+        filterY.reset()
         engine = FaceTrackerEngine(this) { sample -> onSample(sample) }
         engine?.start(this)
     }
@@ -96,6 +106,7 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
 
     /** 每一幀的處理（背景執行緒進來，UI 更新丟回主執行緒）。 */
     private fun onSample(sample: GazeSample?) {
+        if (pausedForCalibration) return
         val m = model ?: return
         val cursor = cursorView ?: return
 
@@ -145,6 +156,7 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         engine?.stop()
         engine = null
@@ -157,31 +169,7 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         super.onDestroy()
     }
 
-    /**
-     * 監聽視窗切換：校正頁在前景時讓出相機並暫停游標；
-     * 校正頁關閉後重載模型（校正結果）、重置濾波器、把相機接回來。
-     * 沒有這段，校正頁會把服務的相機踢掉且不會恢復——「校正完游標死掉」就是這個原因。
-     */
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        val cls = event.className?.toString() ?: return
-        val isCalibration = cls == CalibrationActivity::class.java.name
-
-        if (isCalibration && !pausedForCalibration) {
-            pausedForCalibration = true
-            engine?.stop()
-            engine = null
-            cursorView?.post { cursorView?.setCursor(null) }
-        } else if (!isCalibration && pausedForCalibration) {
-            pausedForCalibration = false
-            model = GazeModel.load(this)
-            filterX.reset()
-            filterY.reset()
-            engine = FaceTrackerEngine(this) { sample -> onSample(sample) }
-            engine?.start(this)
-        }
-    }
-
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onInterrupt() = Unit
 
     /** 全螢幕透明覆蓋層：畫游標圓點與 dwell 進度環。 */
@@ -240,6 +228,42 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
     }
 
     companion object {
+        /** 目前存活的服務實例（無障礙服務為單例）。校正頁用它做相機交接。 */
+        @Volatile
+        private var instance: GazeAccessibilityService? = null
+
+        /**
+         * 校正頁啟動前呼叫：請服務放開相機，完全釋放後在主執行緒回呼 onReleased。
+         * 服務未啟用時直接回呼。這是根除「服務與校正搶相機」競態的關鍵——
+         * 校正頁務必等到 onReleased 才綁定自己的相機。
+         */
+        fun requestPauseForCalibration(onReleased: () -> Unit) {
+            val svc = instance
+            if (svc == null) {
+                onReleased()
+                return
+            }
+            svc.pausedForCalibration = true
+            // engine.stop() 會阻塞等待分析執行緒排空，丟到背景執行緒避免卡主執行緒
+            Thread {
+                svc.engine?.stop()
+                svc.engine = null
+                svc.mainHandler.post {
+                    svc.cursorView?.setCursor(null)
+                    onReleased()
+                }
+            }.start()
+        }
+
+        /** 校正頁結束後呼叫：服務重新載入校正結果並接回相機。 */
+        fun resumeAfterCalibration() {
+            val svc = instance ?: return
+            svc.mainHandler.post {
+                svc.pausedForCalibration = false
+                svc.startEngine()
+            }
+        }
+
         private const val TAG = "GazeService"
         // 與校正頁一致：太高會把「往下看時眼皮半垂」誤判成眨眼，游標下不去
         private const val BLINK_THRESHOLD = 0.09

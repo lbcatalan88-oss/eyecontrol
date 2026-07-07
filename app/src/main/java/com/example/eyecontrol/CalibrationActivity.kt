@@ -57,7 +57,10 @@ class CalibrationActivity : AppCompatActivity() {
         view.post {
             points = buildPoints(view.width.toFloat(), view.height.toFloat())
             startPoint(0)
-            engine.start(this)
+            // 先請無障礙服務放開相機，確認釋放後才綁定自己的——避免兩邊搶相機導致畫面串流被拔掉
+            GazeAccessibilityService.requestPauseForCalibration {
+                if (!isFinishing && !finished) engine.start(this)
+            }
         }
     }
 
@@ -139,6 +142,8 @@ class CalibrationActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         engine.stop()
+        // 通知服務重新載入校正結果並接回相機
+        GazeAccessibilityService.resumeAfterCalibration()
     }
 
     /** 畫校正目標點：外圈進度環 + 內圈實心點。 */
