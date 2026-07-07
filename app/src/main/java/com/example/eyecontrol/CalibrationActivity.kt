@@ -224,6 +224,6 @@ class CalibrationActivity : AppCompatActivity() {
         private const val SAMPLES_PER_POINT = 20  // 每點收 20 幀（後續剔除離群值）
         private const val KEEP_RATIO = 0.7        // 每點保留最接近中心的 70% 樣本
         // 睜眼閾值：看螢幕下方時眼皮自然半垂，設太高會把「往下看」誤判成眨眼
-        private const val BLINK_THRESHOLD = 0.09
+        private const val BLINK_THRESHOLD = 0.08
     }
 }

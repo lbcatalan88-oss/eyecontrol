@@ -67,6 +67,12 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
     private var dwellStart = 0L
     private var cooldownUntil = 0L
 
+    // 眨眼檢測狀態
+    private var isBlinking = false
+    private var blinkStartTime = 0L
+    private var lastValidX = 0f
+    private var lastValidY = 0f
+
     private var screenW = 0
     private var screenH = 0
 
@@ -151,8 +157,45 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
             cursor.post { cursor.setFaceLost() }
             return
         }
-        // 閉眼/眨眼期間虹膜資料不可靠：凍結游標、暫停 dwell 累積
-        if (sample.leftOpen < BLINK_THRESHOLD || sample.rightOpen < BLINK_THRESHOLD) return
+
+        val now = SystemClock.elapsedRealtime()
+
+        // 偵測雙眼是否都閉合（眨眼點擊檢測）
+        val leftClosed = sample.leftOpen < BLINK_THRESHOLD
+        val rightClosed = sample.rightOpen < BLINK_THRESHOLD
+        val bothClosed = leftClosed && rightClosed
+
+        if (bothClosed) {
+            if (!isBlinking) {
+                isBlinking = true
+                blinkStartTime = now
+                // 記錄閉眼前最後一個有效的游標位置
+                lastValidX = anchorX
+                lastValidY = anchorY
+            }
+            // 閉眼期間凍結游標、暫停 dwell 累積，且不進行後續預測
+            return
+        } else {
+            if (isBlinking) {
+                isBlinking = false
+                val blinkDuration = now - blinkStartTime
+                // 故意眨眼點擊：閉眼時間在 150ms 到 600ms 之間，且非暫停模式
+                if (blinkDuration in 150..600 && now >= cooldownUntil && currentMode != ActionMode.PAUSED) {
+                    cursor.post {
+                        triggerActionAt(lastValidX, lastValidY)
+                    }
+                    cooldownUntil = now + COOLDOWN_MS
+                    dwellStart = now
+                    currentProgress = 0f
+                    return
+                }
+            }
+        }
+
+        // 單眼閉合（或雙眼閉合後的釋放幀不穩定），凍結游標不處理
+        if (leftClosed || rightClosed) {
+            return
+        }
 
         // 動態平滑調整：若上一幀在進行停留點擊，則極大化濾波平滑度以鎖定游標；若在移動，則提高反應跟手度。
         if (currentProgress > 0f) {
@@ -457,7 +500,7 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
 
         private const val TAG = "GazeService"
         // 與校正頁一致：太高會把「往下看時眼皮半垂」誤判成眨眼，游標下不去
-        private const val BLINK_THRESHOLD = 0.09
+        private const val BLINK_THRESHOLD = 0.08
         private const val DWELL_RADIUS_PX = 110f  // 視線在此半徑內視為「停留」
         private const val DWELL_TIME_MS = 1000L   // 停留 1 秒觸發點擊
         private const val CONTROL_DWELL_MS = 1000L // 面板按鈕注視 1 秒觸發切換
