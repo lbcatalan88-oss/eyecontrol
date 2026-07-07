@@ -134,8 +134,15 @@ class CalibrationActivity : AppCompatActivity() {
         }
         val avgErr = (errSum / allFeatures.size).toInt()
 
+        val rating = when {
+            avgErr < 60 -> "極佳 🌟"
+            avgErr < 120 -> "優良 ✨"
+            avgErr < 200 -> "普通 👍"
+            else -> "偏差 ⚠️ (建議放穩手機重新校正)"
+        }
+
         model.save(this)
-        Toast.makeText(this, "校正完成！平均誤差約 $avgErr px", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "校正完成！\n精度等級：$rating\n平均誤差：$avgErr px", Toast.LENGTH_LONG).show()
         finish()
     }
 
@@ -146,7 +153,7 @@ class CalibrationActivity : AppCompatActivity() {
         GazeAccessibilityService.resumeAfterCalibration()
     }
 
-    /** 畫校正目標點：外圈進度環 + 內圈實心點。 */
+    /** 畫校正目標點：帶脈衝動畫的外圈進度環 + 呼吸內圈實心點。 */
     private class CalibrationView(context: Context) : View(context) {
         private var tx = -1f
         private var ty = -1f
@@ -154,11 +161,21 @@ class CalibrationActivity : AppCompatActivity() {
         private var label = ""
 
         private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(79, 195, 247) }
+        private val pulsePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(60, 79, 195, 247)
+            style = Paint.Style.FILL
+        }
         private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 6f
+            color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 8f
+        }
+        private val bgRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(40, 255, 255, 255); style = Paint.Style.STROKE; strokeWidth = 8f
         }
         private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.GRAY; textSize = 42f; textAlign = Paint.Align.CENTER
+            color = Color.rgb(200, 200, 200); textSize = 44f; textAlign = Paint.Align.CENTER
+        }
+        private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(120, 120, 120); textSize = 36f; textAlign = Paint.Align.CENTER
         }
 
         fun showTarget(x: Float, y: Float, p: Float, text: String) {
@@ -167,16 +184,38 @@ class CalibrationActivity : AppCompatActivity() {
         }
 
         override fun onDraw(canvas: Canvas) {
-            canvas.drawColor(Color.BLACK)
+            canvas.drawColor(Color.rgb(18, 18, 24)) // 護眼深藍黑色背景
             if (tx < 0) return
-            canvas.drawText(label, width / 2f, height / 2f + 120f, textPaint)
-            canvas.drawCircle(tx, ty, 18f, dotPaint)
+
+            // 畫提示文字與進度文字
+            canvas.drawText(label, width / 2f, height / 2f + 100f, textPaint)
+            canvas.drawText("請保持頭部不動，用眼睛注視動態藍點", width / 2f, height / 2f + 160f, hintPaint)
+
+            val time = System.currentTimeMillis()
+            
+            // 呼吸脈衝動畫：內圈點大小會隨時間縮放
+            val pulseScale = 1.0f + 0.18f * kotlin.math.sin(time / 160.0).toFloat()
+            val baseRadius = 20f
+            
+            // 畫外圈淡脈衝光暈
+            val pulseRadius = baseRadius * (pulseScale + 0.3f)
+            canvas.drawCircle(tx, ty, pulseRadius, pulsePaint)
+            
+            // 畫實心目標點
+            canvas.drawCircle(tx, ty, baseRadius * pulseScale, dotPaint)
+
+            // 畫進度軌道（淡灰色背景環）
+            val r = 40f
+            canvas.drawCircle(tx, ty, r, bgRingPaint)
+
             // 進度環：收滿樣本時剛好畫滿一圈
-            val r = 34f
             canvas.drawArc(
                 tx - r, ty - r, tx + r, ty + r,
                 -90f, 360f * min(progress, 1f), false, ringPaint,
             )
+
+            // 觸發下一幀動畫重繪
+            postInvalidateOnAnimation()
         }
     }
 
