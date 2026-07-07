@@ -42,15 +42,15 @@ android {
 }
 
 dependencies {
-    // CameraX：前鏡頭串流
-    val cameraxVersion = "1.4.1"
+    // CameraX：前鏡頭串流（1.4.2+ 的原生庫已對齊 16KB 分頁）
+    val cameraxVersion = "1.4.2"
     implementation("androidx.camera:camera-core:$cameraxVersion")
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
-    // MediaPipe Tasks Vision：Face Landmarker（含虹膜與 blendshape）
-    implementation("com.google.mediapipe:tasks-vision:0.10.20")
+    // MediaPipe Tasks Vision：Face Landmarker（含虹膜）；0.10.26 起原生庫以 16KB 分頁對齊編譯
+    implementation("com.google.mediapipe:tasks-vision:0.10.26")
 
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
