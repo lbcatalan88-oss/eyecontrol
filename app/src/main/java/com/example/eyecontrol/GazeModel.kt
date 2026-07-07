@@ -13,7 +13,9 @@ class GazeModel(
     private val wx: DoubleArray,
     private val wy: DoubleArray,
     var basePitch: Double = 0.0,
-    var baseYaw: Double = 0.0
+    var baseYaw: Double = 0.0,
+    var kx: Double = 1.6,
+    var ky: Double = 1.3
 ) {
 
     /** 預測螢幕座標（像素），並加上幾何頭部晃動補償。 */
@@ -31,10 +33,9 @@ class GazeModel(
         val deltaPitch = curPitch - basePitch
         val deltaYaw = curYaw - baseYaw
 
-        // 幾何補償：頭向右偏(deltaYaw > 0)，虹膜在眼眶中偏左，預測x偏小，需補上 deltaYaw * screenW * K
-        // 頭向上偏(deltaPitch > 0)，虹膜在眼眶中偏下，預測y偏大，需減去 deltaPitch * screenH * K
-        val compensatedX = px + deltaYaw * screenW * 1.6
-        val compensatedY = py - deltaPitch * screenH * 1.3
+        // 幾何補償：使用自適應的 kx 與 ky
+        val compensatedX = px + deltaYaw * screenW * kx
+        val compensatedY = py - deltaPitch * screenH * ky
 
         return compensatedX to compensatedY
     }
@@ -45,6 +46,8 @@ class GazeModel(
             put("wy", JSONArray(wy.toList()))
             put("basePitch", basePitch)
             put("baseYaw", baseYaw)
+            put("kx", kx)
+            put("ky", ky)
         }
         prefs(context).edit().putString(KEY, json.toString()).apply()
     }
@@ -68,7 +71,9 @@ class GazeModel(
                 val wyArr = arr("wy")
                 val basePitchVal = json.optDouble("basePitch", 0.0)
                 val baseYawVal = json.optDouble("baseYaw", 0.0)
-                val m = GazeModel(wxArr, wyArr, basePitchVal, baseYawVal)
+                val kxVal = json.optDouble("kx", 1.6)
+                val kyVal = json.optDouble("ky", 1.3)
+                val m = GazeModel(wxArr, wyArr, basePitchVal, baseYawVal, kxVal, kyVal)
                 // 特徵定義改版後舊模型維度不符，視為未校正
                 if (m.wx.size != GazeFeatureExtractor.DIM) null else m
             }.getOrNull()
@@ -87,7 +92,7 @@ class GazeModel(
             lambda: Double = 5e-4,
         ): GazeModel {
             require(features.isNotEmpty() && features.size == targets.size)
-            val d = features[0].size
+            val d = features[0].size // 22
 
             var pitchSum = 0.0
             var yawSum = 0.0
@@ -104,33 +109,58 @@ class GazeModel(
             val screenW = if (maxX > 0) (maxX / 0.92f).toDouble() else 1080.0
             val screenH = if (maxY > 0) (maxY / 0.92f).toDouble() else 2400.0
 
-            // XᵀX + λI 與 Xᵀy（x、y 兩個目標共用同一個左側矩陣）
-            val ata = Array(d) { DoubleArray(d) }
-            val atx = DoubleArray(d)
-            val aty = DoubleArray(d)
+            // 擴展特徵向量維度，將姿勢補償項放入特徵矩陣中，利用嶺回歸同時優化 w 與 k
+            val extD = d + 1
 
+            // 1. 訓練 X 軸 (同時求得 wx 與 kx)
+            val ataX = Array(extD) { DoubleArray(extD) }
+            val atx = DoubleArray(extD)
             for (n in features.indices) {
                 val f = features[n]
-                val (tx, ty) = targets[n]
-                
-                val curPitch = f[7]
+                val (tx, _) = targets[n]
                 val curYaw = f[8]
-                val deltaPitch = curPitch - basePitch
                 val deltaYaw = curYaw - baseYaw
+                val compTermX = deltaYaw * screenW
 
-                // 訓練 regression 預測去除頭部幾何補償後的殘差 (residuals)
-                val rx = tx - (deltaYaw * screenW * 1.6)
-                val ry = ty - (-deltaPitch * screenH * 1.3)
+                val fExt = DoubleArray(extD)
+                System.arraycopy(f, 0, fExt, 0, d)
+                fExt[d] = compTermX
 
-                for (i in 0 until d) {
-                    for (j in 0 until d) ata[i][j] += f[i] * f[j]
-                    atx[i] += f[i] * rx
-                    aty[i] += f[i] * ry
+                for (i in 0 until extD) {
+                    for (j in 0 until extD) ataX[i][j] += fExt[i] * fExt[j]
+                    atx[i] += fExt[i] * tx
                 }
             }
-            for (i in 0 until d) ata[i][i] += lambda
+            for (i in 0 until extD) ataX[i][i] += lambda
+            val solX = solve(ataX, atx)
+            val wx = solX.copyOfRange(0, d)
+            val kx = solX[d].coerceIn(0.5, 3.0) // 限制補償範圍以確保穩定
 
-            return GazeModel(solve(ata, atx), solve(ata, aty), basePitch, baseYaw)
+            // 2. 訓練 Y 軸 (同時求得 wy 與 ky)
+            val ataY = Array(extD) { DoubleArray(extD) }
+            val aty = DoubleArray(extD)
+            for (n in features.indices) {
+                val f = features[n]
+                val (_, ty) = targets[n]
+                val curPitch = f[7]
+                val deltaPitch = curPitch - basePitch
+                val compTermY = -deltaPitch * screenH
+
+                val fExt = DoubleArray(extD)
+                System.arraycopy(f, 0, fExt, 0, d)
+                fExt[d] = compTermY
+
+                for (i in 0 until extD) {
+                    for (j in 0 until extD) ataY[i][j] += fExt[i] * fExt[j]
+                    aty[i] += fExt[i] * ty
+                }
+            }
+            for (i in 0 until extD) ataY[i][i] += lambda
+            val solY = solve(ataY, aty)
+            val wy = solY.copyOfRange(0, d)
+            val ky = solY[d].coerceIn(0.5, 3.0) // 限制補償範圍以確保穩定
+
+            return GazeModel(wx, wy, basePitch, baseYaw, kx, ky)
         }
 
         /** 高斯消去法（含部分主元選取）解 A·w = b。A 會被複製，不改動原矩陣。 */

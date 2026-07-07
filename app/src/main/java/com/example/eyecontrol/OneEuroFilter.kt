@@ -49,24 +49,24 @@ class OneEuroFilter(
             targetX = xPrev + clampedDelta
         }
 
-        // 2. 死區平滑：當微小移動小於 deadBand 時，使用 smoothstep 進行漸進式衰減，使游標在靜止與移動之間無縫平滑過渡
-        val delta = targetX - xPrev
-        val dist = abs(delta)
-        val finalX = if (dist < deadBand && deadBand > 0.0) {
-            val factor = dist / deadBand
-            val smoothFactor = factor * factor * (3.0 - 2.0 * factor)
-            xPrev + delta * smoothFactor
-        } else {
-            targetX
-        }
-
-        val dx = (finalX - xPrev) / dt
+        // 2. 計算速度與其平滑值
+        val dx = (targetX - xPrev) / dt
         val aD = alpha(dCutoff, dt)
         val dxHat = aD * dx + (1 - aD) * dxPrev
 
-        val cutoff = minCutoff + beta * abs(dxHat)
+        // 3. 自適應 minCutoff：當移動距離小於 deadBand 時，說明處於微調或靜止狀態，漸進降低 minCutoff 以提升平滑度，避免黏滯感
+        val dist = abs(targetX - xPrev)
+        val dynamicMinCutoff = if (dist < deadBand && deadBand > 0.0) {
+            val ratio = dist / deadBand
+            val factor = ratio * ratio * (3.0 - 2.0 * ratio) // smoothstep
+            minCutoff * (0.15 + 0.85 * factor)
+        } else {
+            minCutoff
+        }
+
+        val cutoff = dynamicMinCutoff + beta * abs(dxHat)
         val a = alpha(cutoff, dt)
-        val xHat = a * finalX + (1 - a) * xPrev
+        val xHat = a * targetX + (1 - a) * xPrev
 
         xPrev = xHat; dxPrev = dxHat
         return xHat
