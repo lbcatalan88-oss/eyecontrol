@@ -8,7 +8,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.eyecontrol"
+        applicationId = "tw.com.zhu.eyecontrol"   // Play 上架識別碼（namespace 維持原程式碼包名即可）
         minSdk = 26
         targetSdk = 36
         versionCode = 1
