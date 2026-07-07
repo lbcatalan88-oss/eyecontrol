@@ -77,6 +77,8 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
     private var blinkStartTime = 0L
     private var lastValidX = 0f
     private var lastValidY = 0f
+    private var lastCursorX = 0f
+    private var lastCursorY = 0f
 
     private var screenW = 0
     private var screenH = 0
@@ -180,12 +182,19 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
     /** 每一幀的處理（背景執行緒進來，UI 更新丟回主執行緒）。 */
     private fun onSample(sample: GazeSample?) {
         if (pausedForCalibration) return
+        mainHandler.post {
+            onSampleOnMainThread(sample)
+        }
+    }
+
+    private fun onSampleOnMainThread(sample: GazeSample?) {
+        if (pausedForCalibration) return
         val m = model ?: return
         val cursor = cursorView ?: return
 
         if (sample == null) {
             // 偵測不到臉：游標留在原地變灰，讓使用者知道是「臉不見了」而不是當機
-            cursor.post { cursor.setFaceLost() }
+            cursor.setFaceLost()
             return
         }
 
@@ -201,8 +210,8 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
                 isBlinking = true
                 blinkStartTime = now
                 // 記錄閉眼前最後一個有效的游標位置
-                lastValidX = anchorX
-                lastValidY = anchorY
+                lastValidX = lastCursorX
+                lastValidY = lastCursorY
             }
             // 閉眼期間凍結游標、暫停 dwell 累積，且不進行後續預測
             return
@@ -212,9 +221,7 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
                 val blinkDuration = now - blinkStartTime
                 // 故意眨眼點擊：閉眼時間在 150ms 到 600ms 之間，且非暫停模式
                 if (blinkDuration in 150..600 && now >= cooldownUntil && currentMode != ActionMode.PAUSED) {
-                    cursor.post {
-                        triggerActionAt(lastValidX, lastValidY)
-                    }
+                    triggerActionAt(lastValidX, lastValidY)
                     cooldownUntil = now + COOLDOWN_MS
                     dwellStart = now
                     currentProgress = 0f
@@ -242,6 +249,10 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         val x = filterX.filter(rawX, t).toFloat().coerceIn(0f, screenW - 1f)
         val y = filterY.filter(rawY, t).toFloat().coerceIn(0f, screenH - 1f)
 
+        // 更新最後的有效位置
+        lastCursorX = x
+        lastCursorY = y
+
         val edgeSize = 50f
         val isAtLeft = x < edgeSize
         val isAtRight = x > screenW - edgeSize
@@ -249,7 +260,6 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         val isAtBottom = y > screenH - edgeSize
         val isAtEdge = isAtLeft || isAtRight || isAtTop || isAtBottom
 
-        val now = SystemClock.elapsedRealtime()
         var progress = 0f
 
         // 控制面板區域檢測 (寬 180 像素，高 700 像素，靠右置中)
@@ -268,18 +278,14 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
 
             // 如果是暫停狀態，只有注視最後一個按鈕（重啟）才有反應
             if (currentMode == ActionMode.PAUSED && btnIndex != 4) {
-                controlView?.post {
-                    controlView?.setHover(-1, 0f)
-                }
+                controlView?.setHover(-1, 0f)
             } else {
                 if (btnIndex != hoverBtnIndex) {
                     hoverBtnIndex = btnIndex
                     hoverStart = now
                 }
                 val hp = min((now - hoverStart) / CONTROL_DWELL_MS.toFloat(), 1f)
-                controlView?.post {
-                    controlView?.setHover(btnIndex, hp)
-                }
+                controlView?.setHover(btnIndex, hp)
                 if (hp >= 1f) {
                     // 觸發切換
                     val targetItem = controlView?.items?.get(btnIndex)
@@ -294,7 +300,7 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
                             }
                         }
                         controlView?.activeMode = currentMode
-                        controlView?.post { controlView?.invalidate() }
+                        controlView?.invalidate()
                     }
                     cooldownUntil = now + COOLDOWN_MS
                     hoverBtnIndex = -1
@@ -307,14 +313,12 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
             // 不在面板上，清除面板 hover 狀態
             if (hoverBtnIndex != -1) {
                 hoverBtnIndex = -1
-                controlView?.post {
-                    controlView?.setHover(-1, 0f)
-                }
+                controlView?.setHover(-1, 0f)
             }
 
             // 如果目前是暫停狀態，游標不累積點擊，且不顯示游標（或者顯示半透明灰色）
             if (currentMode == ActionMode.PAUSED) {
-                cursor.post { cursor.setCursor(null) }
+                cursor.setCursor(null)
                 return
             }
 
@@ -348,7 +352,7 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         } else {
             y
         }
-        cursor.post { cursor.setCursor(Triple(displayX, displayY, progress)) }
+        cursor.setCursor(Triple(displayX, displayY, progress))
     }
 
     private fun triggerActionAt(x: Float, y: Float) {
