@@ -21,6 +21,11 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import kotlin.math.hypot
 import kotlin.math.min
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.pm.ServiceInfo
+import androidx.core.app.NotificationCompat
 
 /**
  * 眼控核心服務：
@@ -86,6 +91,9 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
         instance = this
 
+        // 啟動前台服務通知，防止被系統記憶體回收
+        startForegroundService()
+
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val bounds = wm.currentWindowMetrics.bounds
         screenW = bounds.width()
@@ -94,6 +102,29 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         addCursorOverlay(wm)
         addControlPanel(wm)
         startEngine()
+    }
+
+    private fun startForegroundService() {
+        val channelId = "gaze_service_channel"
+        val channelName = "眼控服務通知"
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val chan = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_LOW)
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(chan)
+        }
+        
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("眼控輔助服務已啟動")
+            .setContentText("正在使用前鏡頭進行眼動追蹤")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+            
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA)
+        } else {
+            startForeground(1001, notification)
+        }
     }
 
     /** 建立並啟動追蹤引擎；同時（重新）載入校正模型。校正後恢復也走這裡。 */
@@ -306,7 +337,18 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         }
 
         currentProgress = progress
-        cursor.post { cursor.setCursor(Triple(x, y, progress)) }
+        // 當進度累積時，視覺上將游標往錨點吸引/鎖定，降低因為微動引起的游標擺動
+        val displayX = if (progress > 0f) {
+            anchorX * progress + x * (1f - progress)
+        } else {
+            x
+        }
+        val displayY = if (progress > 0f) {
+            anchorY * progress + y * (1f - progress)
+        } else {
+            y
+        }
+        cursor.post { cursor.setCursor(Triple(displayX, displayY, progress)) }
     }
 
     private fun triggerActionAt(x: Float, y: Float) {

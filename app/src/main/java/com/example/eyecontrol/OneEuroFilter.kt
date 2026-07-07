@@ -49,12 +49,13 @@ class OneEuroFilter(
             targetX = xPrev + clampedDelta
         }
 
-        // 2. 死區平滑：當微小移動小於 deadBand 時，使用漸進式非線性衰減，使游標靜止時穩如泰山
+        // 2. 死區平滑：當微小移動小於 deadBand 時，使用 smoothstep 進行漸進式衰減，使游標在靜止與移動之間無縫平滑過渡
         val delta = targetX - xPrev
         val dist = abs(delta)
-        val finalX = if (dist < deadBand) {
-            val factor = (dist / deadBand) * (dist / deadBand)
-            xPrev + delta * factor
+        val finalX = if (dist < deadBand && deadBand > 0.0) {
+            val factor = dist / deadBand
+            val smoothFactor = factor * factor * (3.0 - 2.0 * factor)
+            xPrev + delta * smoothFactor
         } else {
             targetX
         }

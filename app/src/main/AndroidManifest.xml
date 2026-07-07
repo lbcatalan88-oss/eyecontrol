@@ -33,7 +33,7 @@
         <!-- 眼控核心：無障礙服務，唯一能對其他 App 注入點擊/滑動的機制 -->
         <service
             android:name=".GazeAccessibilityService"
-            android:exported="false"
+            android:exported="true"
             android:foregroundServiceType="camera"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>

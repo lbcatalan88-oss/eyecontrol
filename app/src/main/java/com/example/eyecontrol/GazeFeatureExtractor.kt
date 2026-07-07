@@ -37,7 +37,7 @@ object GazeFeatureExtractor {
     private const val NOSE_TIP = 1
 
     /** 特徵維度（含偏置項），校正與推論兩端共用。 */
-    const val DIM = 20
+    const val DIM = 22
 
     fun extract(lm: List<NormalizedLandmark>, timestampMs: Long): GazeSample? {
         if (lm.size <= R_IRIS) return null
@@ -75,36 +75,49 @@ object GazeFeatureExtractor {
         val yaw = (x(NOSE_TIP) - eyeMidX) / iod
         val roll = (rCy - lCy) / iod
 
+        // 計算旋轉餘弦和正弦，將特徵旋轉回頭部座標系中，實現旋轉不變性 (Rotation Invariance)
+        val cosRoll = (rCx - lCx) / iod
+        val sinRoll = (rCy - lCy) / iod
+
+        val lIrisXRot = lIrisX * cosRoll + lIrisY * sinRoll
+        val lIrisYRot = -lIrisX * sinRoll + lIrisY * cosRoll
+        val rIrisXRot = rIrisX * cosRoll + rIrisY * sinRoll
+        val rIrisYRot = -rIrisX * sinRoll + rIrisY * cosRoll
+
+        val pitchRot = -yaw * sinRoll + pitch * cosRoll
+        val yawRot = yaw * cosRoll + pitch * sinRoll
+
         // 眼睛與頭部姿態之交互作用項：捕捉頭部轉動時，眼球生理轉動特徵的非線性響應
-        val eyeHeadX = lIrisX * yaw
-        val eyeHeadY = lIrisY * pitch
+        val eyeHeadXRot = lIrisXRot * yawRot
+        val eyeHeadYRot = lIrisYRot * pitchRot
 
         // 二階項：更精準描述頭部姿態的非線性變化（如 pitch^2, yaw^2, pitch * yaw 等）
-        val pitchSq = pitch * pitch
-        val yawSq = yaw * yaw
-        val pitchYaw = pitch * yaw
+        val pitchRotSq = pitchRot * pitchRot
+        val yawRotSq = yawRot * yawRot
+        val pitchYawRot = pitchRot * yawRot
 
         // 額外優化特徵：雙眼平均、雙眼差分（輻輳）、以及姿態/距離的額外二次項，全面抑制噪聲
-        val avgIrisX = (lIrisX + rIrisX) / 2.0
-        val avgIrisY = (lIrisY + rIrisY) / 2.0
-        val irisDiffX = rIrisX - lIrisX
-        val irisDiffY = rIrisY - lIrisY
+        val avgIrisXRot = (lIrisXRot + rIrisXRot) / 2.0
+        val avgIrisYRot = (lIrisYRot + rIrisYRot) / 2.0
+        val irisDiffXRot = rIrisXRot - lIrisXRot
+        val irisDiffYRot = rIrisYRot - lIrisYRot
         val iodSq = iod * iod
         val rollSq = roll * roll
 
-        val features = doubleArrayOf(
-            lIrisX, lIrisY, rIrisX, rIrisY,
-            eyeHeadX, eyeHeadY, iod,
-            pitch, yaw, roll,
-            pitchSq, yawSq, pitchYaw,
-            avgIrisX, avgIrisY,
-            irisDiffX, irisDiffY,
-            iodSq, rollSq,
-            1.0, // 偏置項
-        )
-
         val leftOpen = dist(L_EYE_TOP, L_EYE_BOTTOM) / lW
         val rightOpen = dist(R_EYE_TOP, R_EYE_BOTTOM) / rW
+
+        val features = doubleArrayOf(
+            lIrisXRot, lIrisYRot, rIrisXRot, rIrisYRot,
+            eyeHeadXRot, eyeHeadYRot, iod,
+            pitchRot, yawRot, roll,
+            pitchRotSq, yawRotSq, pitchYawRot,
+            avgIrisXRot, avgIrisYRot,
+            irisDiffXRot, irisDiffYRot,
+            iodSq, rollSq,
+            leftOpen, rightOpen,
+            1.0, // 偏置項
+        )
 
         return GazeSample(features, leftOpen, rightOpen, timestampMs)
     }
