@@ -35,6 +35,9 @@ class FaceTrackerEngine(
     private var landmarker: FaceLandmarker? = null
     private var cameraProvider: ProcessCameraProvider? = null
     private var analysisExecutor: ExecutorService? = null
+    private var cachedBmp: Bitmap? = null
+    private val cachedRotatedBmps = arrayOfNulls<Bitmap>(3)
+    private var rotatedBmpIndex = 0
 
     /** 關閉旗標：stop() 之後分析執行緒不得再碰 landmarker（否則對已釋放的原生物件送資料會 SIGSEGV）。 */
     @Volatile
@@ -121,17 +124,54 @@ class FaceTrackerEngine(
         val rowPadding = plane.rowStride - pixelStride * proxy.width
         val paddedWidth = proxy.width + rowPadding / pixelStride
 
-        var bmp = Bitmap.createBitmap(paddedWidth, proxy.height, Bitmap.Config.ARGB_8888)
-        bmp.copyPixelsFromBuffer(plane.buffer)
-        if (paddedWidth != proxy.width) {
-            bmp = Bitmap.createBitmap(bmp, 0, 0, proxy.width, proxy.height)
+        // 複用中間的 padded 緩衝 Bitmap，避免每幀重複配置
+        var tempBmp = cachedBmp
+        if (tempBmp == null || tempBmp.width != paddedWidth || tempBmp.height != proxy.height) {
+            tempBmp = Bitmap.createBitmap(paddedWidth, proxy.height, Bitmap.Config.ARGB_8888)
+            cachedBmp = tempBmp
         }
+
+        plane.buffer.rewind() // 確保 buffer 指針在開頭
+        tempBmp.copyPixelsFromBuffer(plane.buffer)
+
         val rotation = proxy.imageInfo.rotationDegrees
-        if (rotation != 0) {
-            val m = Matrix().apply { postRotate(rotation.toFloat()) }
-            bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+        val targetWidth = if (rotation == 90 || rotation == 270) proxy.height else proxy.width
+        val targetHeight = if (rotation == 90 || rotation == 270) proxy.width else proxy.height
+
+        // 採用三緩衝循環機制，防止 detectAsync 異步讀取時與寫入產生衝突
+        val rotatedIndex = rotatedBmpIndex
+        rotatedBmpIndex = (rotatedBmpIndex + 1) % 3
+
+        var rotatedBmp = cachedRotatedBmps[rotatedIndex]
+        if (rotatedBmp == null || rotatedBmp.width != targetWidth || rotatedBmp.height != targetHeight) {
+            rotatedBmp?.recycle()
+            rotatedBmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+            cachedRotatedBmps[rotatedIndex] = rotatedBmp
         }
-        return bmp
+
+        val canvas = android.graphics.Canvas(rotatedBmp!!)
+        canvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+
+        val m = Matrix()
+        // 1. 將 (0,0) 移動到原圖中心
+        m.postTranslate(-proxy.width / 2f, -proxy.height / 2f)
+        // 2. 進行旋轉
+        if (rotation != 0) {
+            m.postRotate(rotation.toFloat())
+        }
+        // 3. 移動到目標圖中心
+        m.postTranslate(targetWidth / 2f, targetHeight / 2f)
+
+        // 4. 只裁剪繪製有效範圍，排除 Row Padding
+        val srcRect = android.graphics.Rect(0, 0, proxy.width, proxy.height)
+        val dstRect = android.graphics.RectF(0f, 0f, proxy.width.toFloat(), proxy.height.toFloat())
+
+        canvas.save()
+        canvas.concat(m)
+        canvas.drawBitmap(tempBmp, srcRect, dstRect, null)
+        canvas.restore()
+
+        return rotatedBmp
     }
 
     fun stop() {
@@ -146,6 +186,16 @@ class FaceTrackerEngine(
         analysisExecutor = null
         landmarker?.close()
         landmarker = null
+        
+        // 釋放複用的 Bitmap 緩衝
+        cachedBmp?.recycle()
+        cachedBmp = null
+
+        // 釋放三緩衝
+        for (i in cachedRotatedBmps.indices) {
+            cachedRotatedBmps[i]?.recycle()
+            cachedRotatedBmps[i] = null
+        }
     }
 
     companion object {

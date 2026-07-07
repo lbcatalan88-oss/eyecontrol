@@ -84,32 +84,52 @@ class GazeModel(
         fun train(
             features: List<DoubleArray>,
             targets: List<Pair<Float, Float>>,
-            lambda: Double = 1e-4,
+            lambda: Double = 5e-4,
         ): GazeModel {
             require(features.isNotEmpty() && features.size == targets.size)
             val d = features[0].size
+
+            var pitchSum = 0.0
+            var yawSum = 0.0
+            for (n in features.indices) {
+                pitchSum += features[n][7]
+                yawSum += features[n][8]
+            }
+            val basePitch = pitchSum / features.size
+            val baseYaw = yawSum / features.size
+
+            // 從目標座標估算螢幕維度 (CalibrationActivity 使用 8% 邊距，最大座標約在 92%)
+            val maxX = targets.maxOfOrNull { it.first } ?: 1080f
+            val maxY = targets.maxOfOrNull { it.second } ?: 2400f
+            val screenW = if (maxX > 0) (maxX / 0.92f).toDouble() else 1080.0
+            val screenH = if (maxY > 0) (maxY / 0.92f).toDouble() else 2400.0
 
             // XᵀX + λI 與 Xᵀy（x、y 兩個目標共用同一個左側矩陣）
             val ata = Array(d) { DoubleArray(d) }
             val atx = DoubleArray(d)
             val aty = DoubleArray(d)
-            var pitchSum = 0.0
-            var yawSum = 0.0
+
             for (n in features.indices) {
                 val f = features[n]
                 val (tx, ty) = targets[n]
-                pitchSum += f[7]
-                yawSum += f[8]
+                
+                val curPitch = f[7]
+                val curYaw = f[8]
+                val deltaPitch = curPitch - basePitch
+                val deltaYaw = curYaw - baseYaw
+
+                // 訓練 regression 預測去除頭部幾何補償後的殘差 (residuals)
+                val rx = tx - (deltaYaw * screenW * 1.6)
+                val ry = ty - (-deltaPitch * screenH * 1.3)
+
                 for (i in 0 until d) {
                     for (j in 0 until d) ata[i][j] += f[i] * f[j]
-                    atx[i] += f[i] * tx
-                    aty[i] += f[i] * ty
+                    atx[i] += f[i] * rx
+                    aty[i] += f[i] * ry
                 }
             }
             for (i in 0 until d) ata[i][i] += lambda
 
-            val basePitch = pitchSum / features.size
-            val baseYaw = yawSum / features.size
             return GazeModel(solve(ata, atx), solve(ata, aty), basePitch, baseYaw)
         }
 
