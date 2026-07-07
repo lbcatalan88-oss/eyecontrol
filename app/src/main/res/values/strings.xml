@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">眼控 EyeControl</string>
+    <string name="accessibility_desc">以視線移動游標，凝視停留即可點擊。啟用後 App 會使用前鏡頭追蹤你的眼睛，並在螢幕上顯示游標。</string>
+</resources>
