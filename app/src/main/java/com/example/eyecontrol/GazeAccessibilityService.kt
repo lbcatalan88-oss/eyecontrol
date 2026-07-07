@@ -37,8 +37,8 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
     private var model: GazeModel? = null
     private var cursorView: CursorOverlayView? = null
 
-    private val filterX = OneEuroFilter(minCutoff = 0.5, beta = 0.005)
-    private val filterY = OneEuroFilter(minCutoff = 0.5, beta = 0.005)
+    private val filterX = OneEuroFilter(minCutoff = 0.2, beta = 0.015)
+    private val filterY = OneEuroFilter(minCutoff = 0.2, beta = 0.015)
 
     /** 校正頁開啟期間暫停追蹤（相機同程序只有一路，兩邊搶會互踢）。 */
     @Volatile
@@ -104,6 +104,9 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         cursorView = view
     }
 
+    // 上一幀的停留進度
+    private var currentProgress = 0f
+
     /** 每一幀的處理（背景執行緒進來，UI 更新丟回主執行緒）。 */
     private fun onSample(sample: GazeSample?) {
         if (pausedForCalibration) return
@@ -118,10 +121,26 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         // 閉眼/眨眼期間虹膜資料不可靠：凍結游標、暫停 dwell 累積
         if (sample.leftOpen < BLINK_THRESHOLD || sample.rightOpen < BLINK_THRESHOLD) return
 
-        val (rawX, rawY) = m.predict(sample.features)
+        // 動態平滑調整：若上一幀在進行停留點擊，則極大化濾波平滑度以鎖定游標；若在移動，則提高反應跟手度。
+        if (currentProgress > 0f) {
+            filterX.updateParams(minCutoff = 0.04, beta = 0.005)
+            filterY.updateParams(minCutoff = 0.04, beta = 0.005)
+        } else {
+            filterX.updateParams(minCutoff = 0.22, beta = 0.018)
+            filterY.updateParams(minCutoff = 0.22, beta = 0.018)
+        }
+
+        val (rawX, rawY) = m.predict(sample.features, screenW, screenH)
         val t = sample.timestampMs / 1000.0
         val x = filterX.filter(rawX, t).toFloat().coerceIn(0f, screenW - 1f)
         val y = filterY.filter(rawY, t).toFloat().coerceIn(0f, screenH - 1f)
+
+        val edgeSize = 50f
+        val isAtLeft = x < edgeSize
+        val isAtRight = x > screenW - edgeSize
+        val isAtTop = y < edgeSize
+        val isAtBottom = y > screenH - edgeSize
+        val isAtEdge = isAtLeft || isAtRight || isAtTop || isAtBottom
 
         val now = SystemClock.elapsedRealtime()
         var progress = 0f
@@ -132,15 +151,64 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         } else if (now >= cooldownUntil) {
             progress = min((now - dwellStart) / DWELL_TIME_MS.toFloat(), 1f)
             if (progress >= 1f) {
-                performTap(anchorX, anchorY)
+                if (isAtEdge) {
+                    performEdgeAction(isAtLeft, isAtRight, isAtTop, isAtBottom)
+                } else {
+                    performTap(anchorX, anchorY)
+                }
                 cooldownUntil = now + COOLDOWN_MS
                 dwellStart = now
                 progress = 0f
             }
         }
 
-        val p = progress
-        cursor.post { cursor.setCursor(Triple(x, y, p)) }
+        currentProgress = progress
+        cursor.post { cursor.setCursor(Triple(x, y, progress)) }
+    }
+
+    /** 執行邊緣區域觸發的特殊手勢：返回、首頁與向上/下捲動 */
+    private fun performEdgeAction(left: Boolean, right: Boolean, top: Boolean, bottom: Boolean) {
+        when {
+            top -> {
+                // 頂部邊緣停留：返回
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                cursorView?.post { cursorView?.flashClick() }
+            }
+            bottom -> {
+                // 底部邊緣停留：首頁
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                cursorView?.post { cursorView?.flashClick() }
+            }
+            left -> {
+                // 左側邊緣停留：向上捲動 (Scroll Up - 內容往上移以顯示下方內容)
+                performScroll(up = true)
+            }
+            right -> {
+                // 右側邊緣停留：向下捲動 (Scroll Down - 內容往下移以顯示上方內容)
+                performScroll(up = false)
+            }
+        }
+    }
+
+    private fun performScroll(up: Boolean) {
+        // up (向上捲動)：手勢從螢幕下方滑向上方 (Y 大變小)，內容上移
+        // down (向下捲動)：手勢從螢幕上方滑向下方 (Y 小變大)，內容下移
+        val startY = if (up) screenH * 0.75f else screenH * 0.25f
+        val endY = if (up) screenH * 0.25f else screenH * 0.75f
+        val midX = screenW / 2f
+
+        val path = Path().apply {
+            moveTo(midX, startY)
+            lineTo(midX, endY)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 500)) // 稍微拉長滑動時間提升相容性
+            .build()
+        dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(g: GestureDescription?) {
+                cursorView?.post { cursorView?.flashClick() }
+            }
+        }, null)
     }
 
     private fun performTap(x: Float, y: Float) {

@@ -37,7 +37,7 @@ object GazeFeatureExtractor {
     private const val NOSE_TIP = 1
 
     /** 特徵維度（含偏置項），校正與推論兩端共用。 */
-    const val DIM = 11
+    const val DIM = 14
 
     fun extract(lm: List<NormalizedLandmark>, timestampMs: Long): GazeSample? {
         if (lm.size <= R_IRIS) return null
@@ -56,28 +56,39 @@ object GazeFeatureExtractor {
         val rCx = (x(R_EYE_INNER) + x(R_EYE_OUTER)) / 2.0
         val rCy = (y(R_EYE_INNER) + y(R_EYE_OUTER)) / 2.0
 
+        // 兩眼連線的中點與距離 (Interocular Distance)
+        val eyeMidX = (lCx + rCx) / 2.0
+        val eyeMidY = (lCy + rCy) / 2.0
+        val iod = hypot(rCx - lCx, rCy - lCy)
+        if (iod < 1e-6) return null
+
         val lIrisX = (x(L_IRIS) - lCx) / lW
         val lIrisY = (y(L_IRIS) - lCy) / lW
         val rIrisX = (x(R_IRIS) - rCx) / rW
         val rIrisY = (y(R_IRIS) - rCy) / rW
 
-        // 頭部位置代理：鼻尖座標（平移）、兩眼中心距（遠近）
-        val iod = hypot(rCx - lCx, rCy - lCy)
-
         // 頭部姿態代理（以 iod 正規化，對距離不敏感）：
         //   pitch（抬頭/低頭）：鼻尖相對兩眼中線的「垂直」偏移——頭抬起來時鼻尖靠近眼睛
         //   yaw（左右轉頭）  ：鼻尖相對兩眼中線的「水平」偏移
         //   roll（歪頭）     ：兩眼連線的斜率
-        val eyeMidX = (lCx + rCx) / 2.0
-        val eyeMidY = (lCy + rCy) / 2.0
         val pitch = (y(NOSE_TIP) - eyeMidY) / iod
         val yaw = (x(NOSE_TIP) - eyeMidX) / iod
         val roll = (rCy - lCy) / iod
 
+        // 頭部位置代理：鼻尖座標相對於兩眼中線的正規化偏移（去除絕對座標受距離影響的干擾）
+        val noseOffsetX = (x(NOSE_TIP) - eyeMidX) / iod
+        val noseOffsetY = (y(NOSE_TIP) - eyeMidY) / iod
+
+        // 二階項：更精準描述頭部姿態的非線性變化（如 pitch^2, yaw^2, pitch * yaw 等）
+        val pitchSq = pitch * pitch
+        val yawSq = yaw * yaw
+        val pitchYaw = pitch * yaw
+
         val features = doubleArrayOf(
             lIrisX, lIrisY, rIrisX, rIrisY,
-            x(NOSE_TIP), y(NOSE_TIP), iod,
+            noseOffsetX, noseOffsetY, iod,
             pitch, yaw, roll,
+            pitchSq, yawSq, pitchYaw,
             1.0, // 偏置項
         )
 

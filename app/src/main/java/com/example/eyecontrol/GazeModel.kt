@@ -9,23 +9,42 @@ import org.json.JSONObject
  * 校正時以嶺回歸（ridge regression）解正規方程訓練；特徵僅 8 維，
  * 9 點 × 數十樣本的資料量下解 8×8 線性系統即可，不需要任何 ML 框架。
  */
-class GazeModel(private val wx: DoubleArray, private val wy: DoubleArray) {
+class GazeModel(
+    private val wx: DoubleArray,
+    private val wy: DoubleArray,
+    var basePitch: Double = 0.0,
+    var baseYaw: Double = 0.0
+) {
 
-    /** 預測螢幕座標（像素）。 */
-    fun predict(f: DoubleArray): Pair<Double, Double> {
+    /** 預測螢幕座標（像素），並加上幾何頭部晃動補償。 */
+    fun predict(f: DoubleArray, screenW: Int = 1080, screenH: Int = 2400): Pair<Double, Double> {
         var px = 0.0
         var py = 0.0
         for (i in f.indices) {
             px += wx[i] * f[i]
             py += wy[i] * f[i]
         }
-        return px to py
+
+        // 頭部姿態補償 (Head pose compensation)
+        val curPitch = f[7]
+        val curYaw = f[8]
+        val deltaPitch = curPitch - basePitch
+        val deltaYaw = curYaw - baseYaw
+
+        // 幾何補償：頭向右偏(deltaYaw > 0)，虹膜在眼眶中偏左，預測x偏小，需補上 deltaYaw * screenW * K
+        // 頭向上偏(deltaPitch > 0)，虹膜在眼眶中偏下，預測y偏大，需減去 deltaPitch * screenH * K
+        val compensatedX = px + deltaYaw * screenW * 1.6
+        val compensatedY = py - deltaPitch * screenH * 1.3
+
+        return compensatedX to compensatedY
     }
 
     fun save(context: Context) {
         val json = JSONObject().apply {
             put("wx", JSONArray(wx.toList()))
             put("wy", JSONArray(wy.toList()))
+            put("basePitch", basePitch)
+            put("baseYaw", baseYaw)
         }
         prefs(context).edit().putString(KEY, json.toString()).apply()
     }
@@ -45,7 +64,11 @@ class GazeModel(private val wx: DoubleArray, private val wy: DoubleArray) {
                     val a = json.getJSONArray(k)
                     return DoubleArray(a.length()) { a.getDouble(it) }
                 }
-                val m = GazeModel(arr("wx"), arr("wy"))
+                val wxArr = arr("wx")
+                val wyArr = arr("wy")
+                val basePitchVal = json.optDouble("basePitch", 0.0)
+                val baseYawVal = json.optDouble("baseYaw", 0.0)
+                val m = GazeModel(wxArr, wyArr, basePitchVal, baseYawVal)
                 // 特徵定義改版後舊模型維度不符，視為未校正
                 if (m.wx.size != GazeFeatureExtractor.DIM) null else m
             }.getOrNull()
@@ -70,9 +93,13 @@ class GazeModel(private val wx: DoubleArray, private val wy: DoubleArray) {
             val ata = Array(d) { DoubleArray(d) }
             val atx = DoubleArray(d)
             val aty = DoubleArray(d)
+            var pitchSum = 0.0
+            var yawSum = 0.0
             for (n in features.indices) {
                 val f = features[n]
                 val (tx, ty) = targets[n]
+                pitchSum += f[7]
+                yawSum += f[8]
                 for (i in 0 until d) {
                     for (j in 0 until d) ata[i][j] += f[i] * f[j]
                     atx[i] += f[i] * tx
@@ -81,7 +108,9 @@ class GazeModel(private val wx: DoubleArray, private val wy: DoubleArray) {
             }
             for (i in 0 until d) ata[i][i] += lambda
 
-            return GazeModel(solve(ata, atx), solve(ata, aty))
+            val basePitch = pitchSum / features.size
+            val baseYaw = yawSum / features.size
+            return GazeModel(solve(ata, atx), solve(ata, aty), basePitch, baseYaw)
         }
 
         /** 高斯消去法（含部分主元選取）解 A·w = b。A 會被複製，不改動原矩陣。 */

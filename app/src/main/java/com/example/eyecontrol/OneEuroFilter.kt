@@ -11,10 +11,14 @@ import kotlin.math.abs
  *  minCutoff 越小越平滑（但延遲越高）；beta 越大，快速移動時越跟手。
  */
 class OneEuroFilter(
-    private var minCutoff: Double = 1.0,
-    private var beta: Double = 0.007,
+    private var minCutoff: Double = 0.2, // 降低 minCutoff 提高靜止時的平滑度
+    private var beta: Double = 0.015,     // 提高 beta 增加移動時的跟手反應速度
     private var dCutoff: Double = 1.0,
 ) {
+    fun updateParams(minCutoff: Double, beta: Double) {
+        this.minCutoff = minCutoff
+        this.beta = beta
+    }
     private var xPrev: Double = 0.0
     private var dxPrev: Double = 0.0
     private var tPrev: Double = 0.0
