@@ -8,6 +8,8 @@ import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
@@ -33,6 +35,10 @@ class FaceTrackerEngine(
     private var landmarker: FaceLandmarker? = null
     private var cameraProvider: ProcessCameraProvider? = null
     private var analysisExecutor: ExecutorService? = null
+
+    /** 關閉旗標：stop() 之後分析執行緒不得再碰 landmarker（否則對已釋放的原生物件送資料會 SIGSEGV）。 */
+    @Volatile
+    private var closed = false
 
     fun start(lifecycleOwner: LifecycleOwner) {
         val options = FaceLandmarker.FaceLandmarkerOptions.builder()
@@ -62,8 +68,19 @@ class FaceTrackerEngine(
             val provider = providerFuture.get()
             cameraProvider = provider
 
+            // 1280×720：虹膜在影像中的位移只有幾個像素，解析度太低會讓量化雜訊
+            // 被回歸模型放大成全螢幕的游標亂飄
             val analysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(640, 480))
+                .setResolutionSelector(
+                    ResolutionSelector.Builder()
+                        .setResolutionStrategy(
+                            ResolutionStrategy(
+                                Size(1280, 720),
+                                ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                            )
+                        )
+                        .build()
+                )
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .build()
@@ -84,10 +101,16 @@ class FaceTrackerEngine(
 
     private fun analyze(proxy: ImageProxy) {
         proxy.use {
+            if (closed) return
             val lm = landmarker ?: return
             val bitmap = toBitmap(it) ?: return
-            // LIVE_STREAM 要求單調遞增的時間戳（毫秒）
-            lm.detectAsync(BitmapImageBuilder(bitmap).build(), it.imageInfo.timestamp / 1_000_000)
+            try {
+                // LIVE_STREAM 要求單調遞增的時間戳（毫秒）
+                lm.detectAsync(BitmapImageBuilder(bitmap).build(), it.imageInfo.timestamp / 1_000_000)
+            } catch (e: Exception) {
+                // stop() 競態下 landmarker 可能已關閉；丟掉這幀即可
+                if (!closed) Log.e(TAG, "detectAsync 失敗", e)
+            }
         }
     }
 
@@ -112,9 +135,14 @@ class FaceTrackerEngine(
     }
 
     fun stop() {
+        // 順序很重要：先立旗標擋新幀 → 停相機 → 等分析執行緒清空 → 最後才釋放原生物件
+        closed = true
         cameraProvider?.unbindAll()
         cameraProvider = null
-        analysisExecutor?.shutdown()
+        analysisExecutor?.let {
+            it.shutdown()
+            runCatching { it.awaitTermination(500, java.util.concurrent.TimeUnit.MILLISECONDS) }
+        }
         analysisExecutor = null
         landmarker?.close()
         landmarker = null

@@ -45,11 +45,13 @@ class GazeModel(private val wx: DoubleArray, private val wy: DoubleArray) {
                     val a = json.getJSONArray(k)
                     return DoubleArray(a.length()) { a.getDouble(it) }
                 }
-                GazeModel(arr("wx"), arr("wy"))
+                val m = GazeModel(arr("wx"), arr("wy"))
+                // 特徵定義改版後舊模型維度不符，視為未校正
+                if (m.wx.size != GazeFeatureExtractor.DIM) null else m
             }.getOrNull()
         }
 
-        fun exists(context: Context) = prefs(context).contains(KEY)
+        fun exists(context: Context) = load(context) != null
 
         /**
          * 嶺回歸訓練：w = (XᵀX + λI)⁻¹ Xᵀy，以高斯消去法解線性系統。

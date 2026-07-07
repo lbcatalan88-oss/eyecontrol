@@ -31,9 +31,11 @@ class CalibrationActivity : AppCompatActivity() {
     // 目前狀態（僅在主執行緒讀寫；樣本從背景執行緒 post 過來）
     private var pointIndex = 0
     private var settleUntil = 0L
-    private var collected = 0
     private var points: List<Pair<Float, Float>> = emptyList()
     private var finished = false
+
+    /** 目前目標點收到的原始樣本，收滿後剔除離群值再併入訓練集。 */
+    private val pointBuffer = mutableListOf<DoubleArray>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,7 +70,7 @@ class CalibrationActivity : AppCompatActivity() {
 
     private fun startPoint(index: Int) {
         pointIndex = index
-        collected = 0
+        pointBuffer.clear()
         settleUntil = SystemClock.elapsedRealtime() + SETTLE_MS
         val (x, y) = points[index]
         view.showTarget(x, y, 0f, "${index + 1} / ${points.size}")
@@ -84,19 +86,37 @@ class CalibrationActivity : AppCompatActivity() {
         if (now < settleUntil) return // 等視線移過去、穩定下來
 
         val target = points[pointIndex]
-        allFeatures.add(sample.features)
-        allTargets.add(target)
-        collected++
-        view.showTarget(target.first, target.second, collected / SAMPLES_PER_POINT.toFloat(),
+        pointBuffer.add(sample.features)
+        view.showTarget(target.first, target.second,
+            pointBuffer.size / SAMPLES_PER_POINT.toFloat(),
             "${pointIndex + 1} / ${points.size}")
 
-        if (collected >= SAMPLES_PER_POINT) {
+        if (pointBuffer.size >= SAMPLES_PER_POINT) {
+            commitPoint(target)
             if (pointIndex + 1 < points.size) {
                 startPoint(pointIndex + 1)
             } else {
                 finishCalibration()
             }
         }
+    }
+
+    /**
+     * 剔除離群值後併入訓練集：以虹膜特徵（前 4 維）的樣本中心為基準，
+     * 只保留距離最近的 KEEP_RATIO 比例——視線飄移、殘留眨眼幀都會被丟掉。
+     */
+    private fun commitPoint(target: Pair<Float, Float>) {
+        val centroid = DoubleArray(4)
+        for (f in pointBuffer) for (i in 0 until 4) centroid[i] += f[i] / pointBuffer.size
+
+        val keep = (pointBuffer.size * KEEP_RATIO).toInt().coerceAtLeast(1)
+        pointBuffer
+            .sortedBy { f -> (0 until 4).sumOf { i -> (f[i] - centroid[i]) * (f[i] - centroid[i]) } }
+            .take(keep)
+            .forEach {
+                allFeatures.add(it)
+                allTargets.add(target)
+            }
     }
 
     private fun finishCalibration() {
@@ -157,7 +177,9 @@ class CalibrationActivity : AppCompatActivity() {
 
     companion object {
         private const val SETTLE_MS = 900L        // 每點先等 0.9 秒讓視線穩定
-        private const val SAMPLES_PER_POINT = 15  // 每點收 15 幀
-        private const val BLINK_THRESHOLD = 0.15  // 睜眼程度低於此值視為眨眼
+        private const val SAMPLES_PER_POINT = 20  // 每點收 20 幀（後續剔除離群值）
+        private const val KEEP_RATIO = 0.7        // 每點保留最接近中心的 70% 樣本
+        // 睜眼閾值：看螢幕下方時眼皮自然半垂，設太高會把「往下看」誤判成眨眼
+        private const val BLINK_THRESHOLD = 0.09
     }
 }

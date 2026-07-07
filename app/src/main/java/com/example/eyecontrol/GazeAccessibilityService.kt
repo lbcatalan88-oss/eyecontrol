@@ -37,8 +37,11 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
     private var model: GazeModel? = null
     private var cursorView: CursorOverlayView? = null
 
-    private val filterX = OneEuroFilter(minCutoff = 0.8, beta = 0.01)
-    private val filterY = OneEuroFilter(minCutoff = 0.8, beta = 0.01)
+    private val filterX = OneEuroFilter(minCutoff = 0.5, beta = 0.005)
+    private val filterY = OneEuroFilter(minCutoff = 0.5, beta = 0.005)
+
+    /** 校正頁開啟期間暫停追蹤（相機同程序只有一路，兩邊搶會互踢）。 */
+    private var pausedForCalibration = false
 
     // 凝視停留狀態
     private var anchorX = 0f
@@ -97,7 +100,8 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         val cursor = cursorView ?: return
 
         if (sample == null) {
-            cursor.post { cursor.setCursor(null) }
+            // 偵測不到臉：游標留在原地變灰，讓使用者知道是「臉不見了」而不是當機
+            cursor.post { cursor.setFaceLost() }
             return
         }
         // 閉眼/眨眼期間虹膜資料不可靠：凍結游標、暫停 dwell 累積
@@ -153,16 +157,44 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         super.onDestroy()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    /**
+     * 監聽視窗切換：校正頁在前景時讓出相機並暫停游標；
+     * 校正頁關閉後重載模型（校正結果）、重置濾波器、把相機接回來。
+     * 沒有這段，校正頁會把服務的相機踢掉且不會恢復——「校正完游標死掉」就是這個原因。
+     */
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val cls = event.className?.toString() ?: return
+        val isCalibration = cls == CalibrationActivity::class.java.name
+
+        if (isCalibration && !pausedForCalibration) {
+            pausedForCalibration = true
+            engine?.stop()
+            engine = null
+            cursorView?.post { cursorView?.setCursor(null) }
+        } else if (!isCalibration && pausedForCalibration) {
+            pausedForCalibration = false
+            model = GazeModel.load(this)
+            filterX.reset()
+            filterY.reset()
+            engine = FaceTrackerEngine(this) { sample -> onSample(sample) }
+            engine?.start(this)
+        }
+    }
+
     override fun onInterrupt() = Unit
 
     /** 全螢幕透明覆蓋層：畫游標圓點與 dwell 進度環。 */
     private class CursorOverlayView(context: Context) : View(context) {
         private var cursor: Triple<Float, Float, Float>? = null // x, y, dwellProgress
+        private var faceLost = false
         private var flashUntil = 0L
 
         private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(220, 79, 195, 247)
+        }
+        private val lostPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(150, 158, 158, 158); style = Paint.Style.STROKE; strokeWidth = 5f
         }
         private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 5f
@@ -173,6 +205,13 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
 
         fun setCursor(c: Triple<Float, Float, Float>?) {
             cursor = c
+            faceLost = false
+            invalidate()
+        }
+
+        /** 偵測不到臉：游標留在最後位置，改畫灰色空心圈。 */
+        fun setFaceLost() {
+            faceLost = true
             invalidate()
         }
 
@@ -184,6 +223,10 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         override fun onDraw(canvas: Canvas) {
             val c = cursor ?: return
             val (x, y, progress) = c
+            if (faceLost) {
+                canvas.drawCircle(x, y, 16f, lostPaint)
+                return
+            }
             canvas.drawCircle(x, y, 14f, dotPaint)
             if (progress > 0f) {
                 val r = 26f
@@ -198,7 +241,8 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
 
     companion object {
         private const val TAG = "GazeService"
-        private const val BLINK_THRESHOLD = 0.15
+        // 與校正頁一致：太高會把「往下看時眼皮半垂」誤判成眨眼，游標下不去
+        private const val BLINK_THRESHOLD = 0.09
         private const val DWELL_RADIUS_PX = 110f  // 視線在此半徑內視為「停留」
         private const val DWELL_TIME_MS = 1000L   // 停留 1 秒觸發點擊
         private const val COOLDOWN_MS = 1200L     // 點擊後的不應期，避免連點

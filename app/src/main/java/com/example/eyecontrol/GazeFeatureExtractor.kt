@@ -37,7 +37,7 @@ object GazeFeatureExtractor {
     private const val NOSE_TIP = 1
 
     /** 特徵維度（含偏置項），校正與推論兩端共用。 */
-    const val DIM = 8
+    const val DIM = 11
 
     fun extract(lm: List<NormalizedLandmark>, timestampMs: Long): GazeSample? {
         if (lm.size <= R_IRIS) return null
@@ -64,9 +64,20 @@ object GazeFeatureExtractor {
         // 頭部位置代理：鼻尖座標（平移）、兩眼中心距（遠近）
         val iod = hypot(rCx - lCx, rCy - lCy)
 
+        // 頭部姿態代理（以 iod 正規化，對距離不敏感）：
+        //   pitch（抬頭/低頭）：鼻尖相對兩眼中線的「垂直」偏移——頭抬起來時鼻尖靠近眼睛
+        //   yaw（左右轉頭）  ：鼻尖相對兩眼中線的「水平」偏移
+        //   roll（歪頭）     ：兩眼連線的斜率
+        val eyeMidX = (lCx + rCx) / 2.0
+        val eyeMidY = (lCy + rCy) / 2.0
+        val pitch = (y(NOSE_TIP) - eyeMidY) / iod
+        val yaw = (x(NOSE_TIP) - eyeMidX) / iod
+        val roll = (rCy - lCy) / iod
+
         val features = doubleArrayOf(
             lIrisX, lIrisY, rIrisX, rIrisY,
             x(NOSE_TIP), y(NOSE_TIP), iod,
+            pitch, yaw, roll,
             1.0, // 偏置項
         )
 
