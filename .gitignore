@@ -8,3 +8,7 @@ local.properties
 /captures
 .externalNativeBuild
 .cxx
+.kotlin/
+*.keystore
+*.jks
+google-services.json

@@ -47,3 +47,13 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 目前僅支援「點擊」，尚無捲動/返回/Home 等手勢
 - 螢幕方向固定直向（校正座標系綁定校正當下的方向）
 - 光線不足時虹膜偵測品質下降
+
+## 隱私
+
+所有影像處理皆在裝置端即時完成：前鏡頭影像僅用於當下的視線推算，**不儲存、不上傳**；
+校正資料只有嶺回歸的權重數值（不含任何影像或生物特徵原始資料），以 `MODE_PRIVATE`
+存於本機 SharedPreferences。本 App 不連網、不含任何第三方追蹤。
+
+## 授權
+
+MIT License
