@@ -1,4 +1,5 @@
 <resources>
-    <string name="app_name">眼控 EyeControl</string>
-    <string name="accessibility_desc">以視線移動游標，凝視停留即可點擊。啟用後 App 會使用前鏡頭追蹤你的眼睛，並在螢幕上顯示游標。</string>
+    <string name="app_name">EyeControl</string>
+    <string name="accessibility_desc">Controla el cursor mediante la mirada y realiza acciones al fijarla. Utiliza la cámara frontal y procesa las imágenes localmente.</string>
+    <string-array name="dwell_options"><item>1 segundo</item><item>1,5 segundos</item><item>2 segundos</item></string-array>
 </resources>

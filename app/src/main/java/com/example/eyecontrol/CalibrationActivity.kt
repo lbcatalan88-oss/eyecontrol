@@ -129,7 +129,7 @@ class CalibrationActivity : AppCompatActivity() {
         // 用訓練資料回算平均誤差，讓使用者知道這次校正品質
         var errSum = 0.0
         for (i in allFeatures.indices) {
-            val (px, py) = model.predict(allFeatures[i])
+            val (px, py) = model.predict(allFeatures[i], view.width, view.height)
             errSum += hypot(px - allTargets[i].first, py - allTargets[i].second)
         }
         val avgErr = (errSum / allFeatures.size).toInt()

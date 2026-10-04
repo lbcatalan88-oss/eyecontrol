@@ -18,7 +18,7 @@ class MainActivity : AppCompatActivity() {
     private val requestCamera =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (!granted) {
-                Toast.makeText(this, "沒有相機權限就無法追蹤眼球", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "La cámara es necesaria para seguir la mirada", Toast.LENGTH_LONG).show()
             }
             refreshStatus()
         }
@@ -28,23 +28,39 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        val prefs = getSharedPreferences("eye_control", MODE_PRIVATE)
+        binding.blinkEnabled.isChecked = prefs.getBoolean("deliberate_blink", false)
+        binding.blinkEnabled.setOnCheckedChangeListener { _, enabled ->
+            prefs.edit().putBoolean("deliberate_blink", enabled).apply()
+        }
+        binding.dwellTime.setSelection(when (prefs.getLong("dwell_ms", 1000L)) {
+            1500L -> 1
+            2000L -> 2
+            else -> 0
+        })
+        binding.dwellTime.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                prefs.edit().putLong("dwell_ms", longArrayOf(1000L, 1500L, 2000L)[position]).apply()
+            }
+        }
         binding.btnCamera.setOnClickListener {
             requestCamera.launch(Manifest.permission.CAMERA)
         }
         binding.btnCalibrate.setOnClickListener {
             if (!hasCameraPermission()) {
-                Toast.makeText(this, "請先授予相機權限", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Primero concede el permiso de cámara", Toast.LENGTH_SHORT).show()
             } else {
                 startActivity(Intent(this, CalibrationActivity::class.java))
             }
         }
         binding.btnAccessibility.setOnClickListener {
             if (!GazeModel.exists(this)) {
-                Toast.makeText(this, "請先完成校正", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Primero completa la calibración", Toast.LENGTH_SHORT).show()
             } else {
                 // 無障礙服務只能由使用者在系統設定中手動開啟
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                Toast.makeText(this, "請在清單中找到「眼控 EyeControl」並開啟", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Activa EyeControl en Accesibilidad → Aplicaciones instaladas", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -68,8 +84,8 @@ class MainActivity : AppCompatActivity() {
     private fun refreshStatus() {
         val cam = if (hasCameraPermission()) "✅" else "❌"
         val cal = if (GazeModel.exists(this)) "✅" else "❌"
-        val svc = if (isServiceEnabled()) "✅ 運作中" else "❌ 未開啟"
+        val svc = if (isServiceEnabled()) "✅ Activado" else "❌ Desactivado"
         binding.statusText.text =
-            "狀態：\n  相機權限 $cam\n  眼球校正 $cal\n  眼控服務 $svc"
+            "Estado:\n  Cámara $cam\n  Calibración $cal\n  Servicio EyeControl $svc"
     }
 }

@@ -42,6 +42,7 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     // CameraX：前鏡頭串流（1.4.2+ 的原生庫已對齊 16KB 分頁）
     val cameraxVersion = "1.4.2"
     implementation("androidx.camera:camera-core:$cameraxVersion")

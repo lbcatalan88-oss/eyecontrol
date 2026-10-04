@@ -72,11 +72,12 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
     private var dwellStart = 0L
     private var cooldownUntil = 0L
 
-    // 眨眼檢測狀態
-    private var isBlinking = false
-    private var blinkStartTime = 0L
-    private var lastValidX = 0f
-    private var lastValidY = 0f
+    private val closureDetector = EyeClosureDetector()
+    private var eyesWereClosed = false
+    private var trackingValid = false
+    private var lastSampleAt = 0L
+    private val preferences by lazy { getSharedPreferences("eye_control", Context.MODE_PRIVATE) }
+
     private var lastCursorX = 0f
     private var lastCursorY = 0f
 
@@ -97,9 +98,17 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         startForegroundService()
 
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val bounds = wm.currentWindowMetrics.bounds
-        screenW = bounds.width()
-        screenH = bounds.height()
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            val bounds = wm.currentWindowMetrics.bounds
+            screenW = bounds.width()
+            screenH = bounds.height()
+        } else {
+            val size = android.graphics.Point()
+            @Suppress("DEPRECATION")
+            wm.defaultDisplay.getRealSize(size)
+            screenW = size.x
+            screenH = size.y
+        }
 
         addCursorOverlay(wm)
         addControlPanel(wm)
@@ -132,6 +141,7 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
     /** 建立並啟動追蹤引擎；同時（重新）載入校正模型。校正後恢復也走這裡。 */
     private fun startEngine() {
         if (pausedForCalibration) return
+        resetTracking(SystemClock.elapsedRealtime())
         model = GazeModel.load(this)
         if (model == null) {
             Log.w(TAG, "尚未校正，游標無法運作——請先在 App 內完成校正")
@@ -192,47 +202,38 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         val m = model ?: return
         val cursor = cursorView ?: return
 
-        if (sample == null) {
-            // 偵測不到臉：游標留在原地變灰，讓使用者知道是「臉不見了」而不是當機
+        val now = SystemClock.elapsedRealtime()
+        if (sample == null || sample.features.any { !it.isFinite() }) {
+            resetTracking(now)
             cursor.setFaceLost()
             return
         }
-
-        val now = SystemClock.elapsedRealtime()
-
-        // 偵測雙眼是否都閉合（眨眼點擊檢測）
+        // A missing face or delayed frame must never complete a stale dwell/blink.
+        if (lastSampleAt != 0L && now - lastSampleAt > 250) resetTracking(now)
+        lastSampleAt = now
         val leftClosed = sample.leftOpen < BLINK_THRESHOLD
         val rightClosed = sample.rightOpen < BLINK_THRESHOLD
-        val bothClosed = leftClosed && rightClosed
-
-        if (bothClosed) {
-            if (!isBlinking) {
-                isBlinking = true
-                blinkStartTime = now
-                // 記錄閉眼前最後一個有效的游標位置
-                lastValidX = lastCursorX
-                lastValidY = lastCursorY
-            }
-            // 閉眼期間凍結游標、暫停 dwell 累積，且不進行後續預測
-            return
-        } else {
-            if (isBlinking) {
-                isBlinking = false
-                val blinkDuration = now - blinkStartTime
-                // 故意眨眼點擊：閉眼時間在 150ms 到 600ms 之間，且非暫停模式
-                if (blinkDuration in 150..600 && now >= cooldownUntil && currentMode != ActionMode.PAUSED) {
-                    triggerActionAt(lastValidX, lastValidY)
-                    cooldownUntil = now + COOLDOWN_MS
-                    dwellStart = now
-                    currentProgress = 0f
-                    return
-                }
-            }
-        }
-
-        // 單眼閉合（或雙眼閉合後的釋放幀不穩定），凍結游標不處理
+        val closure = closureDetector.update(leftClosed, rightClosed, now)
         if (leftClosed || rightClosed) {
+            eyesWereClosed = true
+            dwellStart = now
+            hoverStart = now
+            currentProgress = 0f
+            controlView?.setHover(-1, 0f)
             return
+        }
+        if (eyesWereClosed) {
+            eyesWereClosed = false
+            dwellStart = now
+            hoverStart = now
+            currentProgress = 0f
+            if (closure == EyeClosureDetector.Event.DELIBERATE && trackingValid &&
+                preferences.getBoolean("deliberate_blink", false) &&
+                now >= cooldownUntil && currentMode != ActionMode.PAUSED && hoverBtnIndex == -1) {
+                triggerActionAt(lastCursorX, lastCursorY)
+                cooldownUntil = now + COOLDOWN_MS
+                return
+            }
         }
 
         // 動態平滑調整：若上一幀在進行停留點擊，則極大化濾波平滑度以鎖定游標；若在移動，則提高反應跟手度。
@@ -249,6 +250,10 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
         val x = filterX.filter(rawX, t).toFloat().coerceIn(0f, screenW - 1f)
         val y = filterY.filter(rawY, t).toFloat().coerceIn(0f, screenH - 1f)
 
+        if (!trackingValid) {
+            trackingValid = true
+            anchorX = x; anchorY = y; dwellStart = now; hoverStart = now
+        }
         // 更新最後的有效位置
         lastCursorX = x
         lastCursorY = y
@@ -286,7 +291,7 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
                 }
                 val hp = min((now - hoverStart) / CONTROL_DWELL_MS.toFloat(), 1f)
                 controlView?.setHover(btnIndex, hp)
-                if (hp >= 1f) {
+                if (hp >= 1f && now >= cooldownUntil) {
                     // 觸發切換
                     val targetItem = controlView?.items?.get(btnIndex)
                     if (targetItem != null) {
@@ -299,6 +304,8 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
                                 currentMode = targetItem.mode
                             }
                         }
+                        swipeStartPoint = null
+                        controlView?.swipeState = 0
                         controlView?.activeMode = currentMode
                         controlView?.invalidate()
                     }
@@ -326,7 +333,7 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
             if (hypot(x - anchorX, y - anchorY) > DWELL_RADIUS_PX) {
                 anchorX = x; anchorY = y; dwellStart = now
             } else if (now >= cooldownUntil) {
-                progress = min((now - dwellStart) / DWELL_TIME_MS.toFloat(), 1f)
+                progress = min((now - dwellStart) / preferences.getLong("dwell_ms", DWELL_TIME_MS).coerceIn(700L, 2500L).toFloat(), 1f)
                 if (progress >= 1f) {
                     if (isAtEdge) {
                         performEdgeAction(isAtLeft, isAtRight, isAtTop, isAtBottom)
@@ -504,7 +511,26 @@ class GazeAccessibilityService : AccessibilityService(), LifecycleOwner {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
-    override fun onInterrupt() = Unit
+    override fun onInterrupt() {
+        resetTracking(SystemClock.elapsedRealtime())
+        cursorView?.setFaceLost()
+    }
+
+    private fun resetTracking(now: Long) {
+        closureDetector.reset()
+        eyesWereClosed = false
+        trackingValid = false
+        lastSampleAt = 0L
+        dwellStart = now
+        hoverStart = now
+        hoverBtnIndex = -1
+        currentProgress = 0f
+        swipeStartPoint = null
+        controlView?.swipeState = 0
+        controlView?.setHover(-1, 0f)
+        filterX.reset()
+        filterY.reset()
+    }
 
 
     companion object {

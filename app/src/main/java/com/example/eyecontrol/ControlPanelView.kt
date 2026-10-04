@@ -21,11 +21,11 @@ data class ControlPanelButton(
  */
 data class ControlPanelConfig(
     val items: List<ControlPanelButton> = listOf(
-        ControlPanelButton(GazeAccessibilityService.ActionMode.TAP, "單擊", "👆"),
-        ControlPanelButton(GazeAccessibilityService.ActionMode.DOUBLE_TAP, "雙擊", "✌️"),
-        ControlPanelButton(GazeAccessibilityService.ActionMode.LONG_PRESS, "長按", "⏱️"),
-        ControlPanelButton(GazeAccessibilityService.ActionMode.SWIPE, "滑動", "↔️"),
-        ControlPanelButton(GazeAccessibilityService.ActionMode.PAUSED, "暫停", "⏸️")
+        ControlPanelButton(GazeAccessibilityService.ActionMode.TAP, "Toque", "👆"),
+        ControlPanelButton(GazeAccessibilityService.ActionMode.DOUBLE_TAP, "Doble", "✌️"),
+        ControlPanelButton(GazeAccessibilityService.ActionMode.LONG_PRESS, "Mantener", "⏱️"),
+        ControlPanelButton(GazeAccessibilityService.ActionMode.SWIPE, "Deslizar", "↔️"),
+        ControlPanelButton(GazeAccessibilityService.ActionMode.PAUSED, "Pausa", "⏸️")
     ),
     val backgroundColor: Int = Color.argb(195, 28, 28, 35),
     val borderColor: Int = Color.argb(60, 255, 255, 255),
@@ -37,7 +37,7 @@ data class ControlPanelConfig(
 )
 
 /**
- * 控制面板：提供單擊、雙擊、長按、滑動與暫停切換。
+ * 控制面板：提供Toque、Doble、Mantener、Deslizar與Pausa切換。
  */
 class ControlPanelView(
     context: Context,
@@ -115,8 +115,8 @@ class ControlPanelView(
             canvas.drawText(item.iconText, width / 2f, iconY, iconPaint)
 
             val text = when {
-                activeMode == GazeAccessibilityService.ActionMode.PAUSED && item.mode == GazeAccessibilityService.ActionMode.PAUSED -> "重啟"
-                item.mode == GazeAccessibilityService.ActionMode.SWIPE && swipeState == 1 -> "終點"
+                activeMode == GazeAccessibilityService.ActionMode.PAUSED && item.mode == GazeAccessibilityService.ActionMode.PAUSED -> "Reanudar"
+                item.mode == GazeAccessibilityService.ActionMode.SWIPE && swipeState == 1 -> "Destino"
                 else -> item.label
             }
             canvas.drawText(text, width / 2f, labelY, textPaint)

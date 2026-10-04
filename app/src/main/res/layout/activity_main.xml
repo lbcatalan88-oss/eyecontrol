@@ -22,7 +22,7 @@
             android:id="@+id/statusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="狀態：初始化中…"
+            android:text="Cargando estado…"
             android:textSize="15sp"
             android:layout_marginBottom="24dp" />
 
@@ -30,28 +30,33 @@
             android:id="@+id/btnCamera"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="1. 授予相機權限" />
+            android:text="1. Permitir cámara" />
 
         <Button
             android:id="@+id/btnCalibrate"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="2. 開始眼球校正（9 點）" />
+            android:text="2. Calibrar mirada: 9 puntos" />
 
         <Button
             android:id="@+id/btnAccessibility"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="3. 開啟無障礙服務（啟動眼控）" />
+            android:text="3. Activar EyeControl en Accesibilidad" />
 
-        <TextView
+        <CheckBox
+            android:id="@+id/blinkEnabled"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:textSize="13sp"
-            android:text="使用說明：\n• 先完成校正，再開啟無障礙服務。\n• 校正時請固定頭部，只用眼睛看畫面上的點。\n• 眼控啟動後，視線移動藍色游標，凝視同一處約 1 秒即點擊。\n• 到「設定 → 協助工具 → 已安裝的服務」可關閉眼控。" />
-
+            android:text="Clic por cierre deliberado (experimental, 0,5–1,5 s)" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Tiempo de mirada fija para hacer clic" />
+        <Spinner android:id="@+id/dwellTime" android:layout_width="match_parent"
+            android:layout_height="48dp" android:entries="@array/dwell_options" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" android:textSize="14sp"
+            android:text="Calibra los 9 puntos con el teléfono firme y la cabeza quieta. Mueve los ojos para seguir los puntos.\n\nEl panel derecho permite toque, doble toque, pulsación larga, deslizar y pausa. Para deslizar, fija la mirada en el inicio y después en el destino.\n\nBordes: arriba = Atrás; abajo = Inicio; laterales = desplazar.\n\nEl cierre deliberado es opcional. Los guiños y parpadeos breves no hacen clic. Desactívalo si produce acciones involuntarias.\n\nPara detener: Ajustes → Accesibilidad → Aplicaciones instaladas → EyeControl. Procesamiento local de cámara." />
     </LinearLayout>
 </ScrollView>
